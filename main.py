@@ -50,6 +50,8 @@ async def post_init(application: Application) -> None:
     sheets: SheetsClient = application.bot_data["sheets"]
     await sheets.ensure_headers()
 
+    application.create_task(sync_worker(application))
+
 
 async def sync_worker(application: Application) -> None:
     """Periodic task to retry syncing unsynced records to Google Sheets."""
