@@ -96,6 +96,7 @@ def build_application() -> Application:
             CallbackQueryHandler(handlers.my_application, pattern="^my_application$"),
             CallbackQueryHandler(handlers.show_advantages, pattern="^show_advantages$"),
             CallbackQueryHandler(handlers.show_tariffs, pattern="^show_tariffs$"),
+            CallbackQueryHandler(handlers.show_tariff_detail, pattern="^tariff_info_"),
         ],
         states={
             STATE_MAIN: [
@@ -103,6 +104,7 @@ def build_application() -> Application:
                 CallbackQueryHandler(handlers.my_application, pattern="^my_application$"),
                 CallbackQueryHandler(handlers.show_advantages, pattern="^show_advantages$"),
                 CallbackQueryHandler(handlers.show_tariffs, pattern="^show_tariffs$"),
+                CallbackQueryHandler(handlers.show_tariff_detail, pattern="^tariff_info_"),
                 CallbackQueryHandler(handlers.start, pattern="^back_to_main$"),
             ],
             STATE_FIO: [
@@ -125,8 +127,9 @@ def build_application() -> Application:
                 CallbackQueryHandler(handlers.confirm_save, pattern="^confirm_save$"),
                 CallbackQueryHandler(handlers.edit_menu, pattern="^edit_menu$"),
                 CallbackQueryHandler(handlers.cancel, pattern="^cancel_form$"),
+                CallbackQueryHandler(handlers.start, pattern="^back_to_main$"),
                 CallbackQueryHandler(handlers.request_edit_field, pattern="^edit_"),
-                CallbackQueryHandler(handlers.my_application, pattern="^back_to_confirm$"),
+                CallbackQueryHandler(handlers.back_to_confirmation, pattern="^back_to_confirm$"),
             ],
         },
         fallbacks=[
@@ -134,6 +137,7 @@ def build_application() -> Application:
             CommandHandler("help", handlers.help_command),
         ],
         allow_reentry=True,
+        per_message=False,
     )
 
     app.add_handler(conv_handler)

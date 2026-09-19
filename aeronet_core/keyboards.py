@@ -79,7 +79,7 @@ def get_confirm_menu_keyboard() -> InlineKeyboardMarkup:
     buttons = [
         [InlineKeyboardButton("✅ Всё верно, отправить", callback_data="confirm_save")],
         [InlineKeyboardButton("✏️ Изменить поле", callback_data="edit_menu")],
-        [InlineKeyboardButton("❌ Отменить", callback_data="cancel_form")],
+        [InlineKeyboardButton("⬅️ В главное меню", callback_data="back_to_main")],
     ]
     return InlineKeyboardMarkup(buttons)
 

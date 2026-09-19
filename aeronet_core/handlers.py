@@ -55,8 +55,7 @@ logger = logging.getLogger(__name__)
     STATE_TARIFF,
     STATE_COMMENTS,
     STATE_CONFIRM,
-    STATE_EDIT_FIELD,
-) = range(8)
+) = range(7)
 
 
 def format_card(data: dict) -> str:
@@ -136,6 +135,19 @@ class BotHandlers:
         await query.edit_message_text(
             text, reply_markup=get_tariffs_keyboard(), parse_mode=ParseMode.HTML
         )
+        return STATE_MAIN
+
+    async def show_tariff_detail(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> int:
+        """Show popup alert with details of a clicked tariff."""
+        query = update.callback_query
+        tariff_code = query.data.replace("tariff_info_", "")
+        t = TARIFF_MAP.get(tariff_code)
+        if t:
+            await query.answer(f"{t.title} ({t.price})\n\n{t.description}", show_alert=True)
+        else:
+            await query.answer()
         return STATE_MAIN
 
     async def my_application(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -286,12 +298,13 @@ class BotHandlers:
             return await self._show_confirmation(update, context)
 
         await update.message.reply_text(
-            "Шаг 4 из 5: Выберите желаемый <b>тарифный план</b>:",
+            "Номер сохранён.",
             reply_markup=get_remove_keyboard(),
         )
         await update.message.reply_text(
-            "Доступные тарифы:",
+            "Шаг 4 из 5: Выберите желаемый <b>тарифный план</b>:",
             reply_markup=get_tariff_selection_keyboard(),
+            parse_mode=ParseMode.HTML,
         )
         return STATE_TARIFF
 
@@ -314,12 +327,18 @@ class BotHandlers:
             context.user_data.pop("_editing")
             return await self._show_confirmation(update, context)
 
+        selected_title = context.user_data["tariff"]
+        await query.edit_message_text(
+            f"Шаг 4 из 5: Выбран тариф <b>{html.escape(selected_title)}</b>.",
+            parse_mode=ParseMode.HTML,
+        )
+
         prompt = (
             "Шаг 5 из 5: При необходимости оставьте <b>комментарий</b> к заявке "
             "(удобное время звонка, наличие своего роутера и т.д.) "
-            "или нажмите «Пропустить»:"
+            "или нажмите кнопку внизу:"
         )
-        await query.edit_message_text(
+        await query.message.reply_text(
             prompt, reply_markup=get_skip_comments_keyboard(), parse_mode=ParseMode.HTML
         )
         return STATE_COMMENTS
@@ -410,6 +429,15 @@ class BotHandlers:
 
         return STATE_CONFIRM
 
+    async def back_to_confirmation(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> int:
+        """Return from edit menu back to application confirmation card."""
+        query = update.callback_query
+        if query:
+            await query.answer()
+        return await self._show_confirmation(update, context)
+
     async def confirm_save(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         """Save application to local SQLite and sync to Google Sheets."""
         query = update.callback_query
@@ -476,20 +504,23 @@ class BotHandlers:
         return STATE_MAIN
 
     async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        """Cancel questionnaire and return to main menu."""
+        """Cancel current operation and return to main menu."""
+        user_id = update.effective_user.id
+        existing_app = self.db.get_application(user_id)
+        has_app = existing_app is not None
         context.user_data.clear()
-        cancel_text = "Заполнение заявки отменено."
+        cancel_text = "Действие отменено."
 
         if update.callback_query:
             await update.callback_query.answer()
             await update.callback_query.edit_message_text(
                 cancel_text,
-                reply_markup=get_main_menu_keyboard(has_application=False),
+                reply_markup=get_main_menu_keyboard(has_application=has_app),
             )
         else:
             await update.message.reply_text(
                 cancel_text,
-                reply_markup=get_main_menu_keyboard(has_application=False),
+                reply_markup=get_main_menu_keyboard(has_application=has_app),
             )
 
         return STATE_MAIN

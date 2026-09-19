@@ -71,7 +71,7 @@ TARIFF_MAP = {t.code: t for t in DEFAULT_TARIFFS}
 
 # --- Advantages Text ---
 ADVANTAGES_TEXT = (
-    f"🏆 Преимущества подключения к «{PROVIDER_NAME}»:\n\n"
+    f"🏆 <b>Преимущества подключения к «{PROVIDER_NAME}»:</b>\n\n"
     "• Скорость до 1000 Мбит/с по оптоволоконной линии (GPON/FTTB)\n"
     "• Стабильный пинг для онлайн-игр и удалённой работы\n"
     "• Бесплатный выезд инженера и настройка Wi-Fi оборудования\n"

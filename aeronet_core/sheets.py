@@ -46,7 +46,7 @@ class SheetsClient:
             return
         current = self._sheet.row_values(1)
         if not current:
-            self._sheet.update("A1:I1", [SHEET_HEADERS])
+            self._sheet.update(values=[SHEET_HEADERS], range_name="A1:I1")
             self._sheet.format("A1:I1", {"textFormat": {"bold": True}})
             self._sheet.freeze(rows=1)
             logger.info("Initialized Google Sheet headers.")
@@ -80,7 +80,7 @@ class SheetsClient:
             if existing_row:
                 # Update existing row
                 range_name = f"A{existing_row}:I{existing_row}"
-                self._sheet.update(range_name, [row_data])
+                self._sheet.update(values=[row_data], range_name=range_name)
                 logger.info("Updated existing row %d for user %d", existing_row, app.user_id)
             else:
                 # Append new row
