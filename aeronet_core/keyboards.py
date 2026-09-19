@@ -38,13 +38,11 @@ def get_advantages_keyboard() -> InlineKeyboardMarkup:
 
 
 def get_tariffs_keyboard() -> InlineKeyboardMarkup:
-    """Catalog of tariffs view."""
+    """Navigation keyboard under tariffs catalog."""
     buttons = [
-        [InlineKeyboardButton(f"⚡ {t.title} ({t.price})", callback_data=f"tariff_info_{t.code}")]
-        for t in DEFAULT_TARIFFS
+        [InlineKeyboardButton("📝 Оставить заявку", callback_data="start_form")],
+        [InlineKeyboardButton("⬅️ В главное меню", callback_data="back_to_main")],
     ]
-    buttons.append([InlineKeyboardButton("📝 Подать заявку", callback_data="start_form")])
-    buttons.append([InlineKeyboardButton("⬅️ В главное меню", callback_data="back_to_main")])
     return InlineKeyboardMarkup(buttons)
 
 
@@ -74,12 +72,29 @@ def get_skip_comments_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([button])
 
 
-def get_confirm_menu_keyboard() -> InlineKeyboardMarkup:
-    """Confirmation before final submission."""
+def get_confirm_menu_keyboard(is_submitted: bool = False) -> InlineKeyboardMarkup:
+    """Confirmation before final submission or review of submitted application."""
+    if is_submitted:
+        buttons = [
+            [InlineKeyboardButton("✏️ Изменить данные", callback_data="edit_menu")],
+            [InlineKeyboardButton("🔄 Заполнить заново", callback_data="restart_form")],
+            [InlineKeyboardButton("🗑️ Отозвать заявку", callback_data="revoke_application")],
+            [InlineKeyboardButton("⬅️ В главное меню", callback_data="back_to_main")],
+        ]
+    else:
+        buttons = [
+            [InlineKeyboardButton("✅ Всё верно, отправить", callback_data="confirm_save")],
+            [InlineKeyboardButton("✏️ Изменить поле", callback_data="edit_menu")],
+            [InlineKeyboardButton("⬅️ В главное меню", callback_data="back_to_main")],
+        ]
+    return InlineKeyboardMarkup(buttons)
+
+
+def get_revoke_confirm_keyboard() -> InlineKeyboardMarkup:
+    """Confirmation prompt for application revocation."""
     buttons = [
-        [InlineKeyboardButton("✅ Всё верно, отправить", callback_data="confirm_save")],
-        [InlineKeyboardButton("✏️ Изменить поле", callback_data="edit_menu")],
-        [InlineKeyboardButton("⬅️ В главное меню", callback_data="back_to_main")],
+        [InlineKeyboardButton("🗑️ Да, отозвать заявку", callback_data="confirm_revoke")],
+        [InlineKeyboardButton("⬅️ Отмена", callback_data="my_application")],
     ]
     return InlineKeyboardMarkup(buttons)
 

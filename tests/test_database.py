@@ -102,3 +102,27 @@ def test_unsynced_and_mark_synced(db):
 
     app_synced = db.get_application(222)
     assert app_synced.synced is True
+
+
+def test_delete_application(db):
+    app = ApplicationData(
+        user_id=333,
+        username="user3",
+        fio="Третий",
+        phone="+7 (900) 000-00-03",
+        address="Адрес 3",
+        tariff="Тариф 3",
+        comments="",
+        created_at="2026-09-19 12:00:00",
+        status="Новая",
+        synced=True,
+    )
+    db.save_application(app)
+    assert db.get_application(333) is not None
+
+    deleted = db.delete_application(333)
+    assert deleted is True
+    assert db.get_application(333) is None
+
+    # Deleting again returns False
+    assert db.delete_application(333) is False

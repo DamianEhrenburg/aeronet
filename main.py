@@ -4,12 +4,15 @@ import asyncio
 import logging
 import sys
 from telegram import BotCommand
+from telegram.error import TimedOut, NetworkError, BadRequest
+from telegram.request import HTTPXRequest
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
     CallbackQueryHandler,
     ConversationHandler,
+    ContextTypes,
     filters,
 )
 
@@ -34,6 +37,17 @@ logging.basicConfig(
 logger = logging.getLogger("aeronet")
 
 
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log errors caused by updates, suppressing benign network and UI race conditions."""
+    err = context.error
+    if isinstance(err, (TimedOut, NetworkError)):
+        logger.warning("Network or timeout notice: %s", err)
+        return
+    if isinstance(err, BadRequest) and "Message is not modified" in str(err):
+        return
+    logger.error("Unhandled exception while processing update:", exc_info=err)
+
+
 async def post_init(application: Application) -> None:
     """Setup Telegram command menu and initialize Google Sheets headers."""
     commands = [
@@ -41,6 +55,7 @@ async def post_init(application: Application) -> None:
         BotCommand("my_application", "Моя анкета"),
         BotCommand("tariffs", "Тарифные планы"),
         BotCommand("advantages", "Преимущества"),
+        BotCommand("reset", "Отозвать и сбросить анкету"),
         BotCommand("help", "Справка"),
         BotCommand("cancel", "Отменить текущее действие"),
     ]
@@ -81,7 +96,24 @@ def build_application() -> Application:
 
     handlers = BotHandlers(db=db, sheets=sheets)
 
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).concurrent_updates(True).build()
+    request = HTTPXRequest(
+        connection_pool_size=20,
+        connect_timeout=15.0,
+        read_timeout=20.0,
+        write_timeout=15.0,
+        pool_timeout=5.0,
+    )
+
+    app = (
+        Application.builder()
+        .token(TELEGRAM_BOT_TOKEN)
+        .request(request)
+        .post_init(post_init)
+        .concurrent_updates(True)
+        .build()
+    )
+
+    app.add_error_handler(error_handler)
 
     app.bot_data["db"] = db
     app.bot_data["sheets"] = sheets
@@ -92,11 +124,14 @@ def build_application() -> Application:
             CommandHandler("my_application", handlers.my_application),
             CommandHandler("tariffs", handlers.show_tariffs),
             CommandHandler("advantages", handlers.show_advantages),
+            CommandHandler("reset", handlers.reset_command),
             CallbackQueryHandler(handlers.start_form, pattern="^start_form$"),
+            CallbackQueryHandler(handlers.restart_form, pattern="^restart_form$"),
+            CallbackQueryHandler(handlers.revoke_application_prompt, pattern="^revoke_application$"),
+            CallbackQueryHandler(handlers.confirm_revoke, pattern="^confirm_revoke$"),
             CallbackQueryHandler(handlers.my_application, pattern="^my_application$"),
             CallbackQueryHandler(handlers.show_advantages, pattern="^show_advantages$"),
             CallbackQueryHandler(handlers.show_tariffs, pattern="^show_tariffs$"),
-            CallbackQueryHandler(handlers.show_tariff_detail, pattern="^tariff_info_"),
         ],
         states={
             STATE_MAIN: [
@@ -104,7 +139,6 @@ def build_application() -> Application:
                 CallbackQueryHandler(handlers.my_application, pattern="^my_application$"),
                 CallbackQueryHandler(handlers.show_advantages, pattern="^show_advantages$"),
                 CallbackQueryHandler(handlers.show_tariffs, pattern="^show_tariffs$"),
-                CallbackQueryHandler(handlers.show_tariff_detail, pattern="^tariff_info_"),
                 CallbackQueryHandler(handlers.start, pattern="^back_to_main$"),
             ],
             STATE_FIO: [
@@ -128,6 +162,10 @@ def build_application() -> Application:
                 CallbackQueryHandler(handlers.edit_menu, pattern="^edit_menu$"),
                 CallbackQueryHandler(handlers.cancel, pattern="^cancel_form$"),
                 CallbackQueryHandler(handlers.start, pattern="^back_to_main$"),
+                CallbackQueryHandler(handlers.restart_form, pattern="^restart_form$"),
+                CallbackQueryHandler(handlers.revoke_application_prompt, pattern="^revoke_application$"),
+                CallbackQueryHandler(handlers.confirm_revoke, pattern="^confirm_revoke$"),
+                CallbackQueryHandler(handlers.my_application, pattern="^my_application$"),
                 CallbackQueryHandler(handlers.request_edit_field, pattern="^edit_"),
                 CallbackQueryHandler(handlers.back_to_confirmation, pattern="^back_to_confirm$"),
             ],
@@ -135,6 +173,7 @@ def build_application() -> Application:
         fallbacks=[
             CommandHandler("cancel", handlers.cancel),
             CommandHandler("help", handlers.help_command),
+            CommandHandler("reset", handlers.reset_command),
         ],
         allow_reentry=True,
         per_message=False,
@@ -144,6 +183,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("help", handlers.help_command))
     app.add_handler(CommandHandler("tariffs", handlers.show_tariffs))
     app.add_handler(CommandHandler("advantages", handlers.show_advantages))
+    app.add_handler(CommandHandler("reset", handlers.reset_command))
 
     return app
 

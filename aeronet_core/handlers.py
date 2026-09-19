@@ -2,11 +2,13 @@
 
 import html
 import logging
+import time
 from datetime import datetime
 from typing import Optional
 
 from telegram import Update
 from telegram.constants import ParseMode
+from telegram.error import BadRequest
 from telegram.ext import (
     CommandHandler,
     MessageHandler,
@@ -41,6 +43,7 @@ from aeronet_core.keyboards import (
     get_remove_keyboard,
     get_skip_comments_keyboard,
     get_confirm_menu_keyboard,
+    get_revoke_confirm_keyboard,
     get_edit_fields_keyboard,
 )
 
@@ -83,6 +86,29 @@ class BotHandlers:
     def __init__(self, db: Database, sheets: SheetsClient):
         self.db = db
         self.sheets = sheets
+        self._user_last_click: dict[int, float] = {}
+
+    def _is_spam(self, user_id: int, cooldown: float = 0.4) -> bool:
+        """Anti-flood: throttle rapid clicks from the same user."""
+        now = time.monotonic()
+        last = self._user_last_click.get(user_id, 0.0)
+        if now - last < cooldown:
+            return True
+        self._user_last_click[user_id] = now
+        return False
+
+    async def _safe_edit(
+        self, query, text: str, reply_markup=None, parse_mode=None
+    ) -> None:
+        """Edit message safely, ignoring harmless Message is not modified errors."""
+        try:
+            await query.edit_message_text(
+                text=text, reply_markup=reply_markup, parse_mode=parse_mode
+            )
+        except BadRequest as err:
+            if "Message is not modified" in str(err):
+                return
+            raise
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         """Handle /start command and render main menu."""
@@ -100,8 +126,10 @@ class BotHandlers:
 
         if update.callback_query:
             await update.callback_query.answer()
-            await update.callback_query.edit_message_text(
-                greeting, reply_markup=keyboard, parse_mode=ParseMode.HTML
+            if self._is_spam(user.id):
+                return STATE_MAIN
+            await self._safe_edit(
+                update.callback_query, greeting, reply_markup=keyboard, parse_mode=ParseMode.HTML
             )
         else:
             await update.message.reply_text(
@@ -113,41 +141,46 @@ class BotHandlers:
     async def show_advantages(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         """Display advantages of the provider."""
         query = update.callback_query
-        await query.answer()
-        await query.edit_message_text(
-            ADVANTAGES_TEXT,
-            reply_markup=get_advantages_keyboard(),
-            parse_mode=ParseMode.HTML,
-        )
+        if query:
+            await query.answer()
+            if self._is_spam(update.effective_user.id):
+                return STATE_MAIN
+            await self._safe_edit(
+                query,
+                ADVANTAGES_TEXT,
+                reply_markup=get_advantages_keyboard(),
+                parse_mode=ParseMode.HTML,
+            )
         return STATE_MAIN
 
     async def show_tariffs(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         """Display catalog of available internet plans."""
         query = update.callback_query
-        await query.answer()
-
-        lines = [f"⚡ <b>Тарифные планы «{PROVIDER_NAME}»:</b>\n"]
-        for t in DEFAULT_TARIFFS:
-            lines.append(f"• <b>{t.title}</b> ({t.price})")
-            lines.append(f"  {t.description}\n")
-
-        text = "\n".join(lines)
-        await query.edit_message_text(
-            text, reply_markup=get_tariffs_keyboard(), parse_mode=ParseMode.HTML
-        )
-        return STATE_MAIN
-
-    async def show_tariff_detail(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE
-    ) -> int:
-        """Show popup alert with details of a clicked tariff."""
-        query = update.callback_query
-        tariff_code = query.data.replace("tariff_info_", "")
-        t = TARIFF_MAP.get(tariff_code)
-        if t:
-            await query.answer(f"{t.title} ({t.price})\n\n{t.description}", show_alert=True)
-        else:
+        if query:
             await query.answer()
+            if self._is_spam(update.effective_user.id):
+                return STATE_MAIN
+
+        lines = [f"⚡ <b>Тарифные планы провайдера «{PROVIDER_NAME}»</b>\n"]
+        for t in DEFAULT_TARIFFS:
+            if t.code == "consultation":
+                lines.append(f"🤝 <b>{t.title}</b> — {t.price}")
+                lines.append(f"   {t.description}\n")
+            else:
+                lines.append(f"🌐 <b>{t.title}</b> — <b>{t.price}</b>")
+                lines.append(f"   Скорость: <b>{t.speed}</b> · {t.description}\n")
+
+        lines.append("Для оформления подключения нажмите «Оставить заявку».")
+        text = "\n".join(lines)
+
+        if query:
+            await self._safe_edit(
+                query, text, reply_markup=get_tariffs_keyboard(), parse_mode=ParseMode.HTML
+            )
+        else:
+            await update.message.reply_text(
+                text, reply_markup=get_tariffs_keyboard(), parse_mode=ParseMode.HTML
+            )
         return STATE_MAIN
 
     async def my_application(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -160,7 +193,9 @@ class BotHandlers:
             kb = get_main_menu_keyboard(has_application=False)
             if update.callback_query:
                 await update.callback_query.answer()
-                await update.callback_query.edit_message_text(msg, reply_markup=kb)
+                if self._is_spam(user_id):
+                    return STATE_MAIN
+                await self._safe_edit(update.callback_query, msg, reply_markup=kb)
             else:
                 await update.message.reply_text(msg, reply_markup=kb)
             return STATE_MAIN
@@ -174,12 +209,14 @@ class BotHandlers:
         context.user_data["comments"] = app.comments
 
         card_text = format_card(context.user_data)
-        kb = get_confirm_menu_keyboard()
+        kb = get_confirm_menu_keyboard(is_submitted=True)
 
         if update.callback_query:
             await update.callback_query.answer()
-            await update.callback_query.edit_message_text(
-                card_text, reply_markup=kb, parse_mode=ParseMode.HTML
+            if self._is_spam(user_id):
+                return STATE_CONFIRM
+            await self._safe_edit(
+                update.callback_query, card_text, reply_markup=kb, parse_mode=ParseMode.HTML
             )
         else:
             await update.message.reply_text(
@@ -191,6 +228,11 @@ class BotHandlers:
     async def start_form(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         """Begin new application questionnaire."""
         user_id = update.effective_user.id
+        if update.callback_query:
+            await update.callback_query.answer()
+            if self._is_spam(user_id):
+                return STATE_MAIN
+
         existing_app = self.db.get_application(user_id)
 
         if existing_app:
@@ -203,12 +245,19 @@ class BotHandlers:
             context.user_data["comments"] = existing_app.comments
 
             query = update.callback_query
-            await query.answer()
-            await query.edit_message_text(
-                format_card(context.user_data),
-                reply_markup=get_confirm_menu_keyboard(),
-                parse_mode=ParseMode.HTML,
-            )
+            if query:
+                await self._safe_edit(
+                    query,
+                    format_card(context.user_data),
+                    reply_markup=get_confirm_menu_keyboard(is_submitted=True),
+                    parse_mode=ParseMode.HTML,
+                )
+            else:
+                await update.message.reply_text(
+                    format_card(context.user_data),
+                    reply_markup=get_confirm_menu_keyboard(is_submitted=True),
+                    parse_mode=ParseMode.HTML,
+                )
             return STATE_CONFIRM
 
         context.user_data.clear()
@@ -217,8 +266,26 @@ class BotHandlers:
             "Шаг 1 из 5: Введите ваше <b>ФИО</b> (полностью):"
         )
         if update.callback_query:
+            await self._safe_edit(update.callback_query, prompt, parse_mode=ParseMode.HTML)
+        else:
+            await update.message.reply_text(prompt, parse_mode=ParseMode.HTML)
+
+        return STATE_FIO
+
+    async def restart_form(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        """Restart application questionnaire from scratch."""
+        user_id = update.effective_user.id
+        if update.callback_query:
             await update.callback_query.answer()
-            await update.callback_query.edit_message_text(prompt, parse_mode=ParseMode.HTML)
+            if self._is_spam(user_id):
+                return STATE_CONFIRM
+        context.user_data.clear()
+        prompt = (
+            "📝 <b>Заполнение новой заявки на подключение</b>\n\n"
+            "Шаг 1 из 5: Введите ваше <b>ФИО</b> (полностью):"
+        )
+        if update.callback_query:
+            await self._safe_edit(update.callback_query, prompt, parse_mode=ParseMode.HTML)
         else:
             await update.message.reply_text(prompt, parse_mode=ParseMode.HTML)
 
@@ -313,9 +380,12 @@ class BotHandlers:
     ) -> int:
         """Store selected tariff from inline buttons."""
         query = update.callback_query
-        await query.answer()
+        if query:
+            await query.answer()
+            if self._is_spam(update.effective_user.id):
+                return STATE_TARIFF
 
-        tariff_code = query.data.replace("select_tariff_", "")
+        tariff_code = query.data.replace("select_tariff_", "") if query else ""
         tariff_item = TARIFF_MAP.get(tariff_code)
 
         if tariff_item:
@@ -328,19 +398,26 @@ class BotHandlers:
             return await self._show_confirmation(update, context)
 
         selected_title = context.user_data["tariff"]
-        await query.edit_message_text(
-            f"Шаг 4 из 5: Выбран тариф <b>{html.escape(selected_title)}</b>.",
-            parse_mode=ParseMode.HTML,
-        )
+        if query:
+            await self._safe_edit(
+                query,
+                f"Шаг 4 из 5: Выбран тариф <b>{html.escape(selected_title)}</b>.",
+                parse_mode=ParseMode.HTML,
+            )
 
         prompt = (
             "Шаг 5 из 5: При необходимости оставьте <b>комментарий</b> к заявке "
             "(удобное время звонка, наличие своего роутера и т.д.) "
             "или нажмите кнопку внизу:"
         )
-        await query.message.reply_text(
-            prompt, reply_markup=get_skip_comments_keyboard(), parse_mode=ParseMode.HTML
-        )
+        if query:
+            await query.message.reply_text(
+                prompt, reply_markup=get_skip_comments_keyboard(), parse_mode=ParseMode.HTML
+            )
+        else:
+            await update.message.reply_text(
+                prompt, reply_markup=get_skip_comments_keyboard(), parse_mode=ParseMode.HTML
+            )
         return STATE_COMMENTS
 
     async def handle_comments(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -356,7 +433,10 @@ class BotHandlers:
     async def skip_comments(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         """Skip optional comments."""
         query = update.callback_query
-        await query.answer()
+        if query:
+            await query.answer()
+            if self._is_spam(update.effective_user.id):
+                return STATE_COMMENTS
         context.user_data["comments"] = "Без комментариев"
 
         if context.user_data.get("_editing"):
@@ -372,8 +452,8 @@ class BotHandlers:
         kb = get_confirm_menu_keyboard()
 
         if update.callback_query:
-            await update.callback_query.edit_message_text(
-                card_text, reply_markup=kb, parse_mode=ParseMode.HTML
+            await self._safe_edit(
+                update.callback_query, card_text, reply_markup=kb, parse_mode=ParseMode.HTML
             )
         else:
             await update.message.reply_text(
@@ -385,11 +465,15 @@ class BotHandlers:
     async def edit_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         """Show list of fields that can be edited."""
         query = update.callback_query
-        await query.answer()
-        await query.edit_message_text(
-            "Какое поле вы хотите изменить?",
-            reply_markup=get_edit_fields_keyboard(),
-        )
+        if query:
+            await query.answer()
+            if self._is_spam(update.effective_user.id):
+                return STATE_CONFIRM
+            await self._safe_edit(
+                query,
+                "Какое поле вы хотите изменить?",
+                reply_markup=get_edit_fields_keyboard(),
+            )
         return STATE_CONFIRM
 
     async def request_edit_field(
@@ -397,16 +481,19 @@ class BotHandlers:
     ) -> int:
         """Prompt user for a specific field edit."""
         query = update.callback_query
-        await query.answer()
+        if query:
+            await query.answer()
+            if self._is_spam(update.effective_user.id):
+                return STATE_CONFIRM
 
         action = query.data
         context.user_data["_editing"] = True
 
         if action == "edit_fio":
-            await query.edit_message_text("Введите новое ФИО:")
+            await self._safe_edit(query, "Введите новое ФИО:")
             return STATE_FIO
         elif action == "edit_address":
-            await query.edit_message_text("Введите новый адрес подключения:")
+            await self._safe_edit(query, "Введите новый адрес подключения:")
             return STATE_ADDRESS
         elif action == "edit_phone":
             await query.message.reply_text(
@@ -415,13 +502,15 @@ class BotHandlers:
             )
             return STATE_PHONE
         elif action == "edit_tariff":
-            await query.edit_message_text(
+            await self._safe_edit(
+                query,
                 "Выберите новый тарифный план:",
                 reply_markup=get_tariff_selection_keyboard(),
             )
             return STATE_TARIFF
         elif action == "edit_comments":
-            await query.edit_message_text(
+            await self._safe_edit(
+                query,
                 "Введите новый комментарий:",
                 reply_markup=get_skip_comments_keyboard(),
             )
@@ -436,12 +525,17 @@ class BotHandlers:
         query = update.callback_query
         if query:
             await query.answer()
+            if self._is_spam(update.effective_user.id):
+                return STATE_CONFIRM
         return await self._show_confirmation(update, context)
 
     async def confirm_save(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         """Save application to local SQLite and sync to Google Sheets."""
         query = update.callback_query
-        await query.answer()
+        if query:
+            await query.answer()
+            if self._is_spam(update.effective_user.id):
+                return STATE_CONFIRM
 
         user = update.effective_user
         data = context.user_data
@@ -495,12 +589,97 @@ class BotHandlers:
             "Вы можете в любой момент посмотреть статус или изменить контакты через команду /my_application."
         )
 
-        await query.edit_message_text(
-            success_text,
-            reply_markup=get_main_menu_keyboard(has_application=True),
+        if query:
+            await self._safe_edit(
+                query,
+                success_text,
+                reply_markup=get_main_menu_keyboard(has_application=True),
+                parse_mode=ParseMode.HTML,
+            )
+        else:
+            await update.message.reply_text(
+                success_text,
+                reply_markup=get_main_menu_keyboard(has_application=True),
+                parse_mode=ParseMode.HTML,
+            )
+
+        return STATE_MAIN
+
+    async def revoke_application_prompt(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> int:
+        """Prompt confirmation to revoke submitted application."""
+        query = update.callback_query
+        if query:
+            await query.answer()
+            if self._is_spam(update.effective_user.id):
+                return STATE_CONFIRM
+        text = (
+            "⚠️ <b>Подтверждение отзыва заявки</b>\n\n"
+            "Вы действительно хотите отозвать вашу заявку на подключение? "
+            "Все сохранённые данные будут удалены."
+        )
+        if query:
+            await self._safe_edit(
+                query,
+                text,
+                reply_markup=get_revoke_confirm_keyboard(),
+                parse_mode=ParseMode.HTML,
+            )
+        return STATE_CONFIRM
+
+    async def confirm_revoke(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> int:
+        """Execute application revocation from SQLite and Google Sheets."""
+        query = update.callback_query
+        if query:
+            await query.answer()
+            if self._is_spam(update.effective_user.id):
+                return STATE_CONFIRM
+        user_id = update.effective_user.id
+
+        self.db.delete_application(user_id)
+        await self.sheets.delete_application(user_id)
+        context.user_data.clear()
+
+        text = (
+            "🗑️ <b>Заявка отозвана</b>\n\n"
+            "Ваша заявка удалена. Вы можете подать новую заявку в любое время."
+        )
+        if query:
+            await self._safe_edit(
+                query,
+                text,
+                reply_markup=get_main_menu_keyboard(has_application=False),
+                parse_mode=ParseMode.HTML,
+            )
+        else:
+            await update.message.reply_text(
+                text,
+                reply_markup=get_main_menu_keyboard(has_application=False),
+                parse_mode=ParseMode.HTML,
+            )
+        return STATE_MAIN
+
+    async def reset_command(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> int:
+        """Direct command /reset to wipe current user application."""
+        user_id = update.effective_user.id
+        self.db.delete_application(user_id)
+        await self.sheets.delete_application(user_id)
+        context.user_data.clear()
+
+        text = (
+            "🗑️ <b>Ваша анкета сброшена</b>\n\n"
+            "Все сохранённые данные удалены. Вы можете заполнить анкету заново через /start."
+        )
+        await update.message.reply_text(
+            text,
+            reply_markup=get_main_menu_keyboard(has_application=False),
             parse_mode=ParseMode.HTML,
         )
-
         return STATE_MAIN
 
     async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -513,7 +692,10 @@ class BotHandlers:
 
         if update.callback_query:
             await update.callback_query.answer()
-            await update.callback_query.edit_message_text(
+            if self._is_spam(user_id):
+                return STATE_MAIN
+            await self._safe_edit(
+                update.callback_query,
                 cancel_text,
                 reply_markup=get_main_menu_keyboard(has_application=has_app),
             )
@@ -533,6 +715,7 @@ class BotHandlers:
             "/my_application — Посмотреть или изменить сохранённую анкету\n"
             "/tariffs — Список тарифных планов\n"
             "/advantages — Преимущества подключения\n"
+            "/reset — Отозвать и удалить мою анкету\n"
             "/cancel — Отменить текущее действие\n"
             "/help — Показать эту справку"
         )

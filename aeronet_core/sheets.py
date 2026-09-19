@@ -98,6 +98,28 @@ class SheetsClient:
             return False
         return await asyncio.to_thread(self._save_or_update_sync, app)
 
+    def _delete_row_sync(self, user_id: int) -> bool:
+        """Delete row matching user ID in column A."""
+        if not self._sheet:
+            return False
+        try:
+            row_idx = self._find_row_by_user_id_sync(user_id)
+            if row_idx:
+                self._sheet.delete_rows(row_idx)
+                logger.info("Deleted row %d for user %d from Google Sheets", row_idx, user_id)
+                return True
+            return False
+        except Exception as exc:
+            logger.warning("Failed to delete user %d from Google Sheets: %s", user_id, exc)
+            return False
+
+    async def delete_application(self, user_id: int) -> bool:
+        """Delete application from Google Sheets asynchronously."""
+        connected = await self.connect()
+        if not connected:
+            return False
+        return await asyncio.to_thread(self._delete_row_sync, user_id)
+
     async def sync_pending(self, db: Database) -> int:
         """Sync any unsynced applications from local SQLite to Google Sheets."""
         unsynced = db.get_unsynced_applications()

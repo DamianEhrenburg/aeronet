@@ -131,3 +131,12 @@ class Database:
                 (status, user_id),
             )
             conn.commit()
+
+    def delete_application(self, user_id: int) -> bool:
+        """Delete an application record by user ID."""
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "DELETE FROM applications WHERE user_id = ?", (user_id,)
+            )
+            conn.commit()
+            return cursor.rowcount > 0

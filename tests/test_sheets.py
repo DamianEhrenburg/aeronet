@@ -79,3 +79,24 @@ def test_save_or_update_updates_existing_row(mock_sheets_client):
     mock_sheets_client._sheet.update.assert_called_once_with(
         values=[app.to_sheet_row()], range_name="A5:I5"
     )
+
+
+def test_delete_row_sync_success(mock_sheets_client):
+    mock_cell = MagicMock()
+    mock_cell.row = 3
+    mock_sheets_client._sheet.find.return_value = mock_cell
+
+    deleted = mock_sheets_client._delete_row_sync(888)
+
+    assert deleted is True
+    mock_sheets_client._sheet.delete_rows.assert_called_once_with(3)
+
+
+def test_delete_row_sync_not_found(mock_sheets_client):
+    mock_sheets_client._sheet.find.return_value = None
+
+    deleted = mock_sheets_client._delete_row_sync(999999)
+
+    assert deleted is False
+    mock_sheets_client._sheet.delete_rows.assert_not_called()
+
